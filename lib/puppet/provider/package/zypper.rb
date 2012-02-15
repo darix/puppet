@@ -2,6 +2,7 @@ Puppet::Type.type(:package).provide :zypper, :parent => :rpm do
   desc "Support for SuSE `zypper` package manager. Found in SLES10sp2+ and SLES11"
 
   has_feature :versionable
+  has_feature :install_options
 
   commands :zypper => "/usr/bin/zypper"
 
@@ -49,11 +50,22 @@ Puppet::Type.type(:package).provide :zypper, :parent => :rpm do
     license = "--auto-agree-with-licenses"
     noconfirm = "--no-confirm"
 
+
+    install_options = ""
+    if resource[:install_options]
+      install_options = resource[:install_options].collect do |k,v|
+        property = shell_quote k
+        value    = shell_quote v
+
+        "#{property}=#{value}"
+      end
+    end
+
     #zypper 0.6.13 (OpenSuSE 10.2) does not support auto agree with licenses
     if major < 1 and minor <= 6 and patch <= 13
-      zypper quiet, :install, noconfirm, wanted
+      zypper quiet, :install, install_options, noconfirm, wanted
     else
-      zypper quiet, :install, license, noconfirm, wanted
+      zypper quiet, :install, install_options, license, noconfirm, wanted
     end
 
     unless self.query
