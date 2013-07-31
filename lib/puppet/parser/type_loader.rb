@@ -58,36 +58,29 @@ class Puppet::Parser::TypeLoader
     end
   end
 
-  # Import our files.
-  def import(file, current_file = nil)
+  # Import manifest files that match a given file glob pattern.
+  #
+  # @param pattern [String] the file glob to apply when determining which files
+  #   to load
+  # @param dir [String] base directory to use when the file is not
+  #   found in a module
+  # @api private
+  def import(pattern, dir)
     return if Puppet[:ignoreimport]
 
-    # use a path relative to the file doing the importing
-    if current_file
-      dir = current_file.sub(%r{[^/]+$},'').sub(/\/$/, '')
-    else
-      dir = "."
-    end
-    if dir == ""
-      dir = "."
-    end
+    modname, files = Puppet::Parser::Files.find_manifests_in_modules(pattern, environment)
+    if files.empty?
+      abspat = File.expand_path(pattern, dir)
+      file_pattern = abspat + (File.extname(abspat).empty? ? '{.pp,.rb}' : '' )
 
-    pat = file
-    modname, files = Puppet::Parser::Files.find_manifests(pat, :cwd => dir, :environment => environment)
-    if files.size == 0
-      raise Puppet::ImportError.new("No file(s) found for import of '#{pat}'")
-    end
+      files = Dir.glob(file_pattern).uniq.reject { |f| FileTest.directory?(f) }
+      modname = nil
 
-    files.each do |file|
-      unless file =~ /^#{File::SEPARATOR}/
-        file = File.join(dir, file)
+      if files.empty?
+        raise_no_files_found(pattern)
       end
-      @loading_helper.do_once(file) do
-        parse_file(file)
-      end
-    end
-
-    modname
+	end
+    load_files(modname, files)
   end
 
   def known_resource_types
@@ -117,6 +110,31 @@ class Puppet::Parser::TypeLoader
       end
     end
     nil
+  end
+  def import_from_modules(pattern)
+    modname, files = Puppet::Parser::Files.find_manifests_in_modules(pattern, environment)
+    if files.empty?
+      raise_no_files_found(pattern)
+    end
+
+    load_files(modname, files)
+  end
+
+  def raise_no_files_found(pattern)
+    raise Puppet::ImportError, "No file(s) found for import of '#{pattern}'"
+  end
+
+  def load_files(modname, files)
+    loaded_asts = []
+   files.each do |file|
+      @loading_helper.do_once(file) do
+        loaded_asts << parse_file(file)
+      end
+    end
+
+    loaded_asts.collect do |ast|
+      known_resource_types.import_ast(ast, modname)
+    end.flatten
   end
 
   def name2files(namespaces, name)

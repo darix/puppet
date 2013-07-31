@@ -26,6 +26,7 @@ require 'puppet/util/run_mode'
 # it's also a place to find top-level commands like 'debug'
 
 module Puppet
+  require 'puppet/file_system'
   PUPPETVERSION = '2.6.18'
 
   def Puppet.version
