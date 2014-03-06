@@ -30,14 +30,14 @@
 #      rc_reset         clear local rc status (overall remains)
 #      rc_exit          exit appropriate to overall rc status
 
-lockfile=/var/lock/subsys/puppetmaster
+lockfile=/var/lock/subsys/puppetmasterd
 pidfile=/var/run/puppet/puppetmasterd.pid
 
 # Source function library.
 [ -f /etc/rc.status ] && . /etc/rc.status
 
-if [ -f /etc/sysconfig/puppetmaster ]; then
-    . /etc/sysconfig/puppetmaster
+if [ -f /etc/sysconfig/puppetmasterd ]; then
+    . /etc/sysconfig/puppetmasterd
 fi
 
 PUPPETMASTER_OPTS=""
@@ -100,7 +100,7 @@ case "$1" in
         ## Stop daemon with killproc(8) and if this fails
         ## set echo the echo return value.
 
-        killproc -QUIT $PUPPETMASTER && rm -f ${lockfile} ${pidfile}
+        killproc $PUPPETMASTER && rm -f ${lockfile} ${pidfile}
 
         # Remember status and be verbose
         rc_status -v

@@ -33,14 +33,19 @@
 #      rc_exit          exit appropriate to overall rc status
 [ -f /etc/rc.status ] && . /etc/rc.status
 [ -f /etc/sysconfig/puppet ] && . /etc/sysconfig/puppet
-lockfile=${LOCKFILE-/var/lock/subsys/puppet}
-pidfile=${PIDFILE-/var/run/puppet.pid}
-puppetd=${PUPPETD-/usr/sbin/puppetd}
+lockfile=/var/lock/subsys/puppet
+pidfile=/var/run/puppet.pid
+puppetd=/usr/sbin/puppetd
 
-PUPPET_OPTS=""
-[ -n "${PUPPET_SERVER}" ] && PUPPET_OPTS="--server=${PUPPET_SERVER}"
-[ -n "$PUPPET_LOG" ] && PUPPET_OPTS="${PUPPET_OPTS} --logdest=${PUPPET_LOG}"
-[ -n "$PUPPET_PORT" ] && PUPPET_OPTS="${PUPPET_OPTS} --port=${PUPPET_PORT}"
+[ -z "$PUPPET_LOG" ] && PUPPET_LOG="/var/log/puppet/puppet.log"
+[ -z "$PUPPET_SERVER" ] && PUPPET_SERVER="puppet"
+[ -z "$PUPPET_PORT" ] && PUPPET_PORT="8140"
+
+PUPPET_OPTS="
+        --logdest=$PUPPET_LOG \
+        --masterport=$PUPPET_PORT \
+        --server=$PUPPET_SERVER \
+        $PUPPET_EXTRA_OPTS"
 
 # First reset status of this service
 rc_reset
@@ -76,7 +81,7 @@ case "$1" in
         ## Stop daemon with killproc(8) and if this fails
         ## set echo the echo return value.
 
-        killproc -QUIT $puppetd && rm -f ${lockfile} ${pidfile}
+        killproc $puppetd && rm -f ${lockfile} ${pidfile}
 
         # Remember status and be verbose
         rc_status -v
