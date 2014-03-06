@@ -1,10 +1,11 @@
 #! /usr/bin/env ruby
+# encoding: UTF-8
 require 'spec_helper'
 
 describe Puppet::Type.type(:user) do
   before :each do
     @provider_class = described_class.provide(:simple) do
-      has_features :manages_expiry, :manages_password_age, :manages_passwords, :manages_solaris_rbac
+      has_features :manages_expiry, :manages_password_age, :manages_passwords, :manages_solaris_rbac, :manages_shell
       mk_resource_methods
       def create; end
       def delete; end
@@ -47,6 +48,10 @@ describe Puppet::Type.type(:user) do
     described_class.provider_feature(:system_users).should_not be_nil
   end
 
+  it "should have a manages_shell feature" do
+    described_class.provider_feature(:manages_shell).should_not be_nil
+  end
+
   describe :managehome do
     let (:provider) { @provider_class.new(:name => 'foo', :ensure => :absent) }
     let (:instance) { described_class.new(:name => 'foo', :provider => provider) }
@@ -61,7 +66,7 @@ describe Puppet::Type.type(:user) do
 
     it "cannot be set to true for a provider that does not manage homedirs" do
       provider.class.stubs(:manages_homedir?).returns false
-      expect { instance[:managehome] = 'yes' }.to raise_error Puppet::Error
+      expect { instance[:managehome] = 'yes' }.to raise_error(Puppet::Error, /can not manage home directories/)
     end
 
     it "can be set to true for a provider that does manage homedirs" do
@@ -339,12 +344,13 @@ describe Puppet::Type.type(:user) do
     end
   end
 
-  describe "when managing comment on Ruby 1.9", :if => String.respond_to?(:encode) do
+  describe "when managing comment on Ruby 1.9", :if => String.method_defined?(:encode) do
     it "should force value encoding to ASCII-8BIT" do
-      value = 'abcd'.encode(Encoding::UTF_8)
-      comment = described_class.new(:name => 'foo', :comment => value)
-      comment[:comment].should == 'abcd'
-      comment[:comment].encoding.should == Encoding::ASCII_8BIT
+      value = 'abcd™'
+      value.encoding.should == Encoding::UTF_8
+      user = described_class.new(:name => 'foo', :comment => value)
+      user[:comment].encoding.should == Encoding::ASCII_8BIT
+      user[:comment].should == value.force_encoding(Encoding::ASCII_8BIT)
     end
   end
 
@@ -368,5 +374,46 @@ describe Puppet::Type.type(:user) do
       rel.source.ref.should == testrole.ref
       rel.target.ref.should == testuser.ref
     end
+  end
+
+  describe "when setting shell" do
+    before :each do
+      @shell_provider_class = described_class.provide(:shell_manager) do
+        has_features :manages_shell
+        mk_resource_methods
+        def create; check_valid_shell;end
+        def shell=(value); check_valid_shell; end
+        def delete; end
+        def exists?; get(:ensure) != :absent; end
+        def flush; end
+        def self.instances; []; end
+        def check_valid_shell; end
+      end
+
+      described_class.stubs(:defaultprovider).returns @shell_provider_class
+    end
+
+      it "should call :check_valid_shell on the provider when changing shell value" do
+        @provider = @shell_provider_class.new(:name => 'foo', :shell => '/bin/bash', :ensure => :present)
+        @provider.expects(:check_valid_shell)
+        resource = described_class.new(:name => 'foo', :shell => '/bin/zsh', :provider => @provider)
+        Puppet::Util::Storage.stubs(:load)
+        Puppet::Util::Storage.stubs(:store)
+        catalog = Puppet::Resource::Catalog.new
+        catalog.add_resource resource
+        catalog.apply
+      end
+
+      it "should call :check_valid_shell on the provider when changing ensure from present to absent" do
+        @provider = @shell_provider_class.new(:name => 'foo', :shell => '/bin/bash', :ensure => :absent)
+        @provider.expects(:check_valid_shell)
+        resource = described_class.new(:name => 'foo', :shell => '/bin/zsh', :provider => @provider)
+        Puppet::Util::Storage.stubs(:load)
+        Puppet::Util::Storage.stubs(:store)
+        catalog = Puppet::Resource::Catalog.new
+        catalog.add_resource resource
+        catalog.apply
+      end
+
   end
 end

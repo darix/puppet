@@ -13,7 +13,7 @@ module Puppet::Util::Windows
     def root(name)
       Win32::Registry.const_get(name)
     rescue NameError
-      raise Puppet::Error, "Invalid registry key '#{name}'"
+      raise Puppet::Error, "Invalid registry key '#{name}'", $!.backtrace
     end
 
     def open(name, path, mode = KEY_READ | KEY64, &block)
@@ -23,14 +23,48 @@ module Puppet::Util::Windows
           return yield subkey
         end
       rescue Win32::Registry::Error => error
-        raise Puppet::Util::Windows::Error.new("Failed to open registry key '#{hkey.keyname}\\#{path}'", error.code)
+        raise Puppet::Util::Windows::Error.new("Failed to open registry key '#{hkey.keyname}\\#{path}'", error.code, error)
       end
     end
 
     def values(subkey)
       values = {}
-      subkey.each_value { |name, type, data| values[name] = data }
+      subkey.each_value do |name, type, data|
+        case type
+        when Win32::Registry::REG_MULTI_SZ
+          data.each { |str| force_encoding(str) }
+        when Win32::Registry::REG_SZ, Win32::Registry::REG_EXPAND_SZ
+          force_encoding(data)
+        end
+        values[name] = data
+      end
       values
     end
+
+    if defined?(Encoding)
+      def force_encoding(str)
+        if @encoding.nil?
+          # See https://bugs.ruby-lang.org/issues/8943
+          # Ruby uses ANSI versions of Win32 APIs to read values from the
+          # registry. The encoding of these strings depends on the active
+          # code page. However, ruby incorrectly sets the string
+          # encoding to US-ASCII. So we must force the encoding to the
+          # correct value.
+          require 'windows/national'
+          begin
+            cp = Windows::National::GetACP.call
+            @encoding = Encoding.const_get("CP#{cp}")
+          rescue
+            @encoding = Encoding.default_external
+          end
+        end
+
+        str.force_encoding(@encoding)
+      end
+    else
+      def force_encoding(str, enc)
+      end
+    end
+    private :force_encoding
   end
 end

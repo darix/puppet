@@ -45,7 +45,7 @@ describe "the generate function" do
     scope.function_generate([command]).should == 'yay'
   end
 
-  describe "on Windows", :as_platform => :windows do
+  describe "on Windows", :if => Puppet.features.microsoft_windows? do
     it "should accept the tilde in the path" do
       command = "C:/DOCUME~1/ADMINI~1/foo.bat"
       Dir.expects(:chdir).with(File.dirname(command)).returns("yay")
@@ -106,6 +106,10 @@ describe "the generate function" do
     cmd
   end
 
+  after :each do
+    File.delete(command) if Puppet::FileSystem.exist?(command)
+  end
+
   it "should call generator with no arguments" do
     scope.function_generate([command]).should == "a- b-\n"
   end
@@ -119,10 +123,10 @@ describe "the generate function" do
   end
 
   it "should fail if generator is not absolute" do
-    expect { scope.function_generate(['boo']) }.to raise_error Puppet::ParseError
+    expect { scope.function_generate(['boo']) }.to raise_error(Puppet::ParseError)
   end
 
   it "should fail if generator fails" do
-    expect { scope.function_generate(['/boo']) }.to raise_error Puppet::ParseError
+    expect { scope.function_generate(['/boo']) }.to raise_error(Puppet::ParseError)
   end
 end

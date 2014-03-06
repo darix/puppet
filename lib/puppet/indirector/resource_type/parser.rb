@@ -23,18 +23,20 @@ class Puppet::Indirector::ResourceType::Parser < Puppet::Indirector::Code
   # @return [Puppet::Resource::Type, nil]
   # @api public
   def find(request)
-    krt = request.environment.known_resource_types
+    Puppet.override(:squelch_parse_errors => true) do
+      krt = resource_types_in(request.environment)
 
-    # This is a bit ugly.
-    [:hostclass, :definition, :node].each do |type|
-      # We have to us 'find_<type>' here because it will
-      # load any missing types from disk, whereas the plain
-      # '<type>' method only returns from memory.
-      if r = krt.send("find_#{type}", [""], request.key)
-        return r
+      # This is a bit ugly.
+      [:hostclass, :definition, :node].each do |type|
+        # We have to us 'find_<type>' here because it will
+        # load any missing types from disk, whereas the plain
+        # '<type>' method only returns from memory.
+        if r = krt.send("find_#{type}", [""], request.key)
+          return r
+        end
       end
+      nil
     end
-    nil
   end
 
   # Search for resource types using a regular expression. Unlike `find`, this
@@ -53,39 +55,47 @@ class Puppet::Indirector::ResourceType::Parser < Puppet::Indirector::Code
   #
   # @api public
   def search(request)
-    krt = request.environment.known_resource_types
-    # Make sure we've got all of the types loaded.
-    krt.loader.import_all
+    Puppet.override(:squelch_parse_errors => true) do
 
-    result_candidates = case request.options[:kind]
-        when "class"
-          krt.hostclasses.values
-        when "defined_type"
-          krt.definitions.values
-        when "node"
-          krt.nodes.values
-        when nil
-          result_candidates = [krt.hostclasses.values, krt.definitions.values, krt.nodes.values]
-        else
-          raise ArgumentError, "Unrecognized kind filter: " +
-                    "'#{request.options[:kind]}', expected one " +
-                    " of 'class', 'defined_type', or 'node'."
+      krt = resource_types_in(request.environment)
+      # Make sure we've got all of the types loaded.
+      krt.loader.import_all
+
+      result_candidates = case request.options[:kind]
+          when "class"
+            krt.hostclasses.values
+          when "defined_type"
+            krt.definitions.values
+          when "node"
+            krt.nodes.values
+          when nil
+            result_candidates = [krt.hostclasses.values, krt.definitions.values, krt.nodes.values]
+          else
+            raise ArgumentError, "Unrecognized kind filter: " +
+                      "'#{request.options[:kind]}', expected one " +
+                      " of 'class', 'defined_type', or 'node'."
+        end
+
+      result = result_candidates.flatten.reject { |t| t.name == "" }
+      return nil if result.empty?
+      return result if request.key == "*"
+
+      # Strip the regex of any wrapping slashes that might exist
+      key = request.key.sub(/^\//, '').sub(/\/$/, '')
+      begin
+        regex = Regexp.new(key)
+      rescue => detail
+        raise ArgumentError, "Invalid regex '#{request.key}': #{detail}", detail.backtrace
       end
 
-    result = result_candidates.flatten.reject { |t| t.name == "" }
-    return nil if result.empty?
-    return result if request.key == "*"
-
-    # Strip the regex of any wrapping slashes that might exist
-    key = request.key.sub(/^\//, '').sub(/\/$/, '')
-    begin
-      regex = Regexp.new(key)
-    rescue => detail
-      raise ArgumentError, "Invalid regex '#{request.key}': #{detail}"
+      result.reject! { |t| t.name.to_s !~ regex }
+      return nil if result.empty?
+      result
     end
+  end
 
-    result.reject! { |t| t.name.to_s !~ regex }
-    return nil if result.empty?
-    result
+  def resource_types_in(environment)
+    environment.check_for_reparse
+    environment.known_resource_types
   end
 end

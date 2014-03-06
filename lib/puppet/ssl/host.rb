@@ -4,6 +4,7 @@ require 'puppet/ssl/key'
 require 'puppet/ssl/certificate'
 require 'puppet/ssl/certificate_request'
 require 'puppet/ssl/certificate_revocation_list'
+require 'puppet/ssl/certificate_request_attributes'
 
 # The class that manages all aspects of our SSL certificates --
 # private keys, public keys, requests, etc.
@@ -117,12 +118,17 @@ DOC
     indirection.destroy(name)
   end
 
-  def self.from_pson(pson)
-    instance = new(pson["name"])
-    if pson["desired_state"]
-      instance.desired_state = pson["desired_state"]
+  def self.from_data_hash(data)
+    instance = new(data["name"])
+    if data["desired_state"]
+      instance.desired_state = data["desired_state"]
     end
     instance
+  end
+
+  def self.from_pson(pson)
+    Puppet.deprecation_warning("from_pson is being removed in favour of from_data_hash.")
+    self.from_data_hash(pson)
   end
 
   # Puppet::SSL::Host is actually indirected now so the original implementation
@@ -171,6 +177,12 @@ DOC
       elsif Puppet::SSL::CertificateAuthority.ca? and fqdn = Facter.value(:fqdn) and domain = Facter.value(:domain)
         options[:dns_alt_names] = "puppet, #{fqdn}, puppet.#{domain}"
       end
+    end
+
+    csr_attributes = Puppet::SSL::CertificateRequestAttributes.new(Puppet[:csr_attributes])
+    if csr_attributes.load
+      options[:csr_attributes] = csr_attributes.custom_attributes
+      options[:extension_requests] = csr_attributes.extension_requests
     end
 
     @certificate_request = CertificateRequest.new(name)
@@ -298,10 +310,6 @@ ERROR_STRING
     result[:dns_alt_names] = thing_to_use.subject_alt_names
 
     result
-  end
-
-  def to_pson(*args)
-    to_data_hash.to_pson(*args)
   end
 
   # eventually we'll probably want to move this somewhere else or make it

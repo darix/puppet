@@ -60,20 +60,42 @@ class Puppet::SSL::CertificateAuthority
 
   attr_reader :name, :host
 
-  # If autosign is configured, then autosign all CSRs that match our configuration.
-  def autosign(name)
-    if autosign?(name)
-      Puppet.info "Autosigning #{name}"
-      sign(name)
+  # If autosign is configured, autosign the csr we are passed.
+  # @param csr [Puppet::SSL::CertificateRequest] The csr to sign.
+  # @return [Void]
+  # @api private
+  def autosign(csr)
+    if autosign?(csr)
+      Puppet.info "Autosigning #{csr.name}"
+      sign(csr.name)
     end
   end
 
   # Determine if a CSR can be autosigned by the autosign store or autosign command
   #
-  # @param name [String] The name of the CSR to check
+  # @param csr [Puppet::SSL::CertificateRequest] The CSR to check
   # @return [true, false]
-  def autosign?(name)
-    autosign_store?(name) or autosign_command?(name)
+  # @api private
+  def autosign?(csr)
+    auto = Puppet[:autosign]
+
+    decider = case auto
+      when 'false', false, nil
+        AutosignNever.new
+      when 'true', true
+        AutosignAlways.new
+      else
+        file = Puppet::FileSystem.pathname(auto)
+        if Puppet::FileSystem.executable?(file)
+          Puppet::SSL::CertificateAuthority::AutosignCommand.new(auto)
+        elsif Puppet::FileSystem.exist?(file)
+          AutosignConfig.new(file)
+        else
+          AutosignNever.new
+        end
+      end
+
+    decider.allowed?(csr)
   end
 
   # Retrieves (or creates, if necessary) the certificate revocation list.
@@ -152,7 +174,7 @@ class Puppet::SSL::CertificateAuthority
     begin
       Puppet.settings.setting(:capass).open('w') { |f| f.print pass }
     rescue Errno::EACCES => detail
-      raise Puppet::Error, "Could not write CA password: #{detail}"
+      raise Puppet::Error, "Could not write CA password: #{detail}", detail.backtrace
     end
 
     @password = pass
@@ -162,9 +184,11 @@ class Puppet::SSL::CertificateAuthority
 
   # Lists the names of all signed certificates.
   #
+  # @param name [Array<string>] filter to cerificate names
+  #
   # @return [Array<String>]
-  def list
-    list_certificates.collect { |c| c.name }
+  def list(name='*')
+    list_certificates(name).collect { |c| c.name }
   end
 
   # Return all the certificate objects as found by the indirector
@@ -173,13 +197,16 @@ class Puppet::SSL::CertificateAuthority
   # Created to prevent the case of reading all certs from disk, getting
   # just their names and verifying the cert for each name, which then
   # causes the cert to again be read from disk.
+  # @param name [Array<string>] filter to cerificate names
   #
   # @author Jeff Weiss <jeff.weiss@puppetlabs.com>
   # @api Puppet Enterprise Licensing
   #
+  # @param name [Array<string>] filter to cerificate names
+  #
   # @return [Array<Puppet::SSL::Certificate>]
-  def list_certificates
-    Puppet::SSL::Certificate.indirection.search("*")
+  def list_certificates(name='*')
+    Puppet::SSL::Certificate.indirection.search(name)
   end
 
   # Read the next serial from the serial file, and increment the
@@ -205,7 +232,7 @@ class Puppet::SSL::CertificateAuthority
 
   # Does the password file exist?
   def password?
-    Puppet::FileSystem::File.exist? Puppet[:capass]
+    Puppet::FileSystem.exist?(Puppet[:capass])
   end
 
   # Print a given host's certificate as text.
@@ -287,8 +314,11 @@ class Puppet::SSL::CertificateAuthority
 
   def check_internal_signing_policies(hostname, csr, allow_dns_alt_names)
     # Reject unknown request extensions.
-    unknown_req = csr.request_extensions.
-      reject {|x| RequestExtensionWhitelist.include? x["oid"] }
+    unknown_req = csr.request_extensions.reject do |x|
+      RequestExtensionWhitelist.include? x["oid"] or
+        Puppet::SSL::Oids.subtree_of?('ppRegCertExt', x["oid"], true) or
+        Puppet::SSL::Oids.subtree_of?('ppPrivCertExt', x["oid"], true)
+    end
 
     if unknown_req and not unknown_req.empty?
       names = unknown_req.map {|x| x["oid"] }.sort.uniq.join(", ")
@@ -383,7 +413,7 @@ class Puppet::SSL::CertificateAuthority
   private :create_x509_store
 
   # Utility method which is API for PE license checking.
-  # This is used rather than `verify` because 
+  # This is used rather than `verify` because
   #  1) We have already read the certificate from disk into memory.
   #     To read the certificate from disk again is just wasteful.
   #  2) Because we're checking a large number of certificates against
@@ -439,58 +469,41 @@ class Puppet::SSL::CertificateAuthority
     Puppet::SSL::CertificateRequest.indirection.search("*").collect { |r| r.name }
   end
 
-  private
-
-  # Check the autosign setting to see if this cert can be signed.
-  #
   # @api private
-  # @param name [String] The name of the CSR to check
-  # @return [true, false]
-  def autosign_store?(name)
-    auto = Puppet[:autosign]
+  class AutosignAlways
+    def allowed?(csr)
+      true
+    end
+  end
 
-    case auto
+  # @api private
+  class AutosignNever
+    def allowed?(csr)
+      false
+    end
+  end
 
-    when 'false', false, nil
-      return false
+  # @api private
+  class AutosignConfig
+    def initialize(config_file)
+      @config = config_file
+    end
 
-    when 'true', true
-      return true
+    def allowed?(csr)
+      autosign_store.allowed?(csr.name, '127.1.1.1')
+    end
 
-    else
-      if Puppet::FileSystem::File.exist?(auto)
-        store = autosign_store(auto)
-        store.allowed?(name, '127.1.1.1')
+    private
+
+    def autosign_store
+      auth = Puppet::Network::AuthStore.new
+      Puppet::FileSystem.each_line(@config) do |line|
+        next if line =~ /^\s*#/
+        next if line =~ /^\s*$/
+        auth.allow(line.chomp)
       end
+
+      auth
     end
-  end
-
-  # Construct an autosign store for the contents of the autosign file
-  #
-  # @api private
-  # @param file [String] The path to the autosign file
-  # @return [Puppet::Network::AuthStore]
-  def autosign_store(file)
-    auth = Puppet::Network::AuthStore.new
-    File.readlines(file).each do |line|
-      next if line =~ /^\s*#/
-      next if line =~ /^\s*$/
-      auth.allow(line.chomp)
-    end
-
-    auth
-  end
-
-  # Try to autosign a certificate based an external script
-  #
-  # @api private
-  # @param name [String] The name of the CSR to check
-  # @return [true, false]
-  def autosign_command?(name)
-    cmd = Puppet[:autosign_command]
-    return false if cmd.nil?
-
-    autosign_cmd = Puppet::SSL::CertificateAuthority::AutosignCommand.new(cmd)
-    autosign_cmd.allowed?(name)
   end
 end

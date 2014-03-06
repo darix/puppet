@@ -263,7 +263,7 @@ module Util
     begin
       URI::Generic.build(params)
     rescue => detail
-      raise Puppet::Error, "Failed to convert '#{path}' to URI: #{detail}"
+      raise Puppet::Error, "Failed to convert '#{path}' to URI: #{detail}", detail.backtrace
     end
   end
   module_function :path_to_uri
@@ -375,16 +375,29 @@ module Util
   # exist; if the file is present we copy the existing mode/owner/group values
   # across. The default_mode can be expressed as an octal integer, a numeric string (ie '0664')
   # or a symbolic file mode.
+
+  DEFAULT_POSIX_MODE = 0644
+  DEFAULT_WINDOWS_MODE = nil
+
   def replace_file(file, default_mode, &block)
     raise Puppet::DevError, "replace_file requires a block" unless block_given?
 
-    unless valid_symbolic_mode?(default_mode)
-      raise Puppet::DevError, "replace_file default_mode: #{default_mode} is invalid"
-    end
-    mode = symbolic_mode_to_int(normalize_symbolic_mode(default_mode))
+    if default_mode
+      unless valid_symbolic_mode?(default_mode)
+        raise Puppet::DevError, "replace_file default_mode: #{default_mode} is invalid"
+      end
 
-    file     = Pathname(file)
-    tempfile = Tempfile.new(file.basename.to_s, file.dirname.to_s)
+      mode = symbolic_mode_to_int(normalize_symbolic_mode(default_mode))
+    else
+      if Puppet.features.microsoft_windows?
+        mode = DEFAULT_WINDOWS_MODE
+      else
+        mode = DEFAULT_POSIX_MODE
+      end
+    end
+
+    file     = Puppet::FileSystem.pathname(file)
+    tempfile = Tempfile.new(Puppet::FileSystem.basename_string(file), Puppet::FileSystem.dir_string(file))
 
     # Set properties of the temporary file before we write the content, because
     # Tempfile doesn't promise to be safe from reading by other people, just
@@ -394,16 +407,22 @@ module Util
     # and specifically handle the platform, which has all sorts of magic.
     # So, unlike Unix, we don't pre-prep security; we use the default "quite
     # secure" tempfile permissions instead.  Magic happens later.
-    unless Puppet.features.microsoft_windows?
+    if !Puppet.features.microsoft_windows?
       # Grab the current file mode, and fall back to the defaults.
-      stat = file.lstat rescue OpenStruct.new(:mode => mode,
-                                              :uid  => Process.euid,
-                                              :gid  => Process.egid)
+      effective_mode =
+      if Puppet::FileSystem.exist?(file)
+        stat = Puppet::FileSystem.lstat(file)
+        tempfile.chown(stat.uid, stat.gid)
+        stat.mode
+      else
+        mode
+      end
 
-      # We only care about the bottom four slots, which make the real mode,
-      # and not the rest of the platform stat call fluff and stuff.
-      tempfile.chmod(stat.mode & 07777)
-      tempfile.chown(stat.uid, stat.gid)
+      if effective_mode
+        # We only care about the bottom four slots, which make the real mode,
+        # and not the rest of the platform stat call fluff and stuff.
+        tempfile.chmod(effective_mode & 07777)
+      end
     end
 
     # OK, now allow the caller to write the content of the file.
@@ -426,43 +445,19 @@ module Util
     tempfile.close
 
     if Puppet.features.microsoft_windows?
-      # This will appropriately clone the file, but only if the file we are
-      # replacing exists.  Which is kind of annoying; thanks Microsoft.
-      #
-      # So, to avoid getting into an infinite loop we will retry once if the
-      # file doesn't exist, but only the once...
-      have_retried = false
-
-      begin
-        # Yes, the arguments are reversed compared to the rename in the rest
-        # of the world.
-        Puppet::Util::Windows::File.replace_file(file, tempfile.path)
-      rescue Puppet::Util::Windows::Error
-        # This might race, but there are enough possible cases that there
-        # isn't a good, solid "better" way to do this, and the next call
-        # should fail in the same way anyhow.
-        raise if have_retried or Puppet::FileSystem::File.exist?(file)
-        have_retried = true
-
-        # OK, so, we can't replace a file that doesn't exist, so let us put
-        # one in place and set the permissions.  Then we can retry and the
-        # magic makes this all work.
-        #
-        # This is the least-worst option for handling Windows, as far as we
-        # can determine.
-        File.open(file, 'a') do |fh|
-          # this space deliberately left empty for auto-close behaviour,
-          # append mode, and not actually changing any of the content.
+      # Windows ReplaceFile needs a file to exist, so touch handles this
+      if !Puppet::FileSystem.exist?(file)
+        Puppet::FileSystem.touch(file)
+        if mode
+          Puppet::Util::Windows::Security.set_mode(mode, Puppet::FileSystem.path_string(file))
         end
-
-        # Set the permissions to what we want.
-        Puppet::Util::Windows::Security.set_mode(mode, file.to_s)
-
-        # ...and finally retry the operation.
-        retry
       end
+      # Yes, the arguments are reversed compared to the rename in the rest
+      # of the world.
+      Puppet::Util::Windows::File.replace_file(FileSystem.path_string(file), tempfile.path)
+
     else
-      File.rename(tempfile.path, file.to_s)
+      File.rename(tempfile.path, Puppet::FileSystem.path_string(file))
     end
 
     # Ideally, we would now fsync the directory as well, but Ruby doesn't

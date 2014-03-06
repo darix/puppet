@@ -6,7 +6,7 @@ Puppet::Type.type(:package).provide :pacman, :parent => Puppet::Provider::Packag
 
   commands :pacman => "/usr/bin/pacman"
   # Yaourt is a common AUR helper which, if installed, we can use to query the AUR
-  commands :yaourt => "/usr/bin/yaourt" if Puppet::FileSystem::File.exist? '/usr/bin/yaourt'
+  commands :yaourt => "/usr/bin/yaourt" if Puppet::FileSystem.exist? '/usr/bin/yaourt'
 
   confine     :operatingsystem => :archlinux
   defaultfor  :operatingsystem => :archlinux
@@ -14,7 +14,7 @@ Puppet::Type.type(:package).provide :pacman, :parent => Puppet::Provider::Packag
 
   # If yaourt is installed, we can make use of it
   def yaourt?
-    return Puppet::FileSystem::File.exist? '/usr/bin/yaourt'
+    return Puppet::FileSystem.exist?('/usr/bin/yaourt')
   end
 
   # Install a package using 'pacman', or 'yaourt' if available.
@@ -46,7 +46,7 @@ Puppet::Type.type(:package).provide :pacman, :parent => Puppet::Provider::Packag
     begin
       source_uri = URI.parse source
     rescue => detail
-      fail "Invalid source '#{source}': #{detail}"
+      self.fail Puppet::Error, "Invalid source '#{source}': #{detail}", detail
     end
 
     source = case source_uri.scheme

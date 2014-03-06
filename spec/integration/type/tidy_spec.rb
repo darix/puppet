@@ -12,12 +12,12 @@ describe Puppet::Type.type(:tidy) do
   end
 
   # Testing #355.
-  it "should be able to remove dead links", :if => Puppet::Type.type(:file).defaultprovider.feature?(:manages_symlinks) do
+  it "should be able to remove dead links", :if => Puppet.features.manages_symlinks? do
     dir = tmpfile("tidy_link_testing")
     link = File.join(dir, "link")
     target = tmpfile("no_such_file_tidy_link_testing")
     Dir.mkdir(dir)
-    Puppet::FileSystem::File.new(target).symlink(link)
+    Puppet::FileSystem.symlink(target, link)
 
     tidy = Puppet::Type.type(:tidy).new :path => dir, :recurse => true
 
@@ -26,6 +26,6 @@ describe Puppet::Type.type(:tidy) do
 
     catalog.apply
 
-    Puppet::FileSystem::File.new(link).symlink?.should be_false
+    Puppet::FileSystem.symlink?(link).should be_false
   end
 end

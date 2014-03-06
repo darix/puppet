@@ -3,19 +3,25 @@ require 'puppet/provider/package'
 # RPM packaging.  Should work anywhere that has rpm installed.
 Puppet::Type.type(:package).provide :rpm, :source => :rpm, :parent => Puppet::Provider::Package do
   desc "RPM packaging support; should work anywhere with a working `rpm`
-    binary."
+    binary.
+
+    This provider supports the `install_options` and `uninstall_options`
+    attributes, which allow command-line flags to be passed to the RPM binary.
+    These options should be specified as an array, where each element is either
+    a string or a `{'--flag' => 'value'}` hash. (That hash example would be
+    equivalent to a `'--flag=value'` string; the hash syntax is available as a
+    convenience.)"
 
   has_feature :versionable
   has_feature :install_options
+  has_feature :uninstall_options
 
   # Note: self:: is required here to keep these constants in the context of what will
   # eventually become this Puppet::Type::Package::ProviderRpm class.
-  self::RPM_DESCRIPTION_DELIMITER = ':DESC:'
   # The query format by which we identify installed packages
-  self::NEVRA_FORMAT = %Q{%{NAME} %|EPOCH?{%{EPOCH}}:{0}| %{VERSION} %{RELEASE} %{ARCH} #{self::RPM_DESCRIPTION_DELIMITER} %{SUMMARY}\\n}
-  self::NEVRA_REGEX  = %r{^(\S+) (\S+) (\S+) (\S+) (\S+)(?: #{self::RPM_DESCRIPTION_DELIMITER} ?(.*))?$}
-  self::RPM_PACKAGE_NOT_FOUND_REGEX = /package .+ is not installed/
-  self::NEVRA_FIELDS = [:name, :epoch, :version, :release, :arch, :description]
+  self::NEVRA_FORMAT = %Q{%{NAME} %|EPOCH?{%{EPOCH}}:{0}| %{VERSION} %{RELEASE} %{ARCH}\\n}
+  self::NEVRA_REGEX  = %r{^(\S+) (\S+) (\S+) (\S+) (\S+)$}
+  self::NEVRA_FIELDS = [:name, :epoch, :version, :release, :arch]
 
   commands :rpm => "rpm"
 
@@ -58,7 +64,7 @@ Puppet::Type.type(:package).provide :rpm, :source => :rpm, :parent => Puppet::Pr
         }
       }
     rescue Puppet::ExecutionFailure
-      raise Puppet::Error, "Failed to list packages"
+      raise Puppet::Error, "Failed to list packages", $!.backtrace
     end
 
     packages
@@ -71,11 +77,12 @@ Puppet::Type.type(:package).provide :rpm, :source => :rpm, :parent => Puppet::Pr
     #NOTE: Prior to a fix for issue 1243, this method potentially returned a cached value
     #IF YOU CALL THIS METHOD, IT WILL CALL RPM
     #Use get(:property) to check if cached values are available
-    cmd = ["-q", @resource[:name], "#{self.class.nosignature}", "#{self.class.nodigest}", "--qf", self.class::NEVRA_FORMAT]
+    cmd = ["-q", '--whatprovides',  @resource[:name], "#{self.class.nosignature}", "#{self.class.nodigest}", "--qf", self.class::NEVRA_FORMAT]
 
     begin
       output = rpm(*cmd)
     rescue Puppet::ExecutionFailure
+      # rpm -q exits 1 if package not found
       return nil
     end
     # FIXME: We could actually be getting back multiple packages
@@ -134,7 +141,9 @@ Puppet::Type.type(:package).provide :rpm, :source => :rpm, :parent => Puppet::Pr
         nvr += ".#{get(:arch)}"
       end
     end
-    rpm "-e", nvr
+
+    flag = ["-e"] + uninstall_options
+    rpm flag, nvr
   end
 
   def update
@@ -145,10 +154,14 @@ Puppet::Type.type(:package).provide :rpm, :source => :rpm, :parent => Puppet::Pr
     join_options(resource[:install_options])
   end
 
+  def uninstall_options
+    join_options(resource[:uninstall_options])
+  end
+
   private
 
   # Turns a array of options into flags to be passed to rpm install(8) and
-  # The options can be passed as a string or hash. Note that passing a hash 
+  # The options can be passed as a string or hash. Note that passing a hash
   # should only be used in case -Dfoo=bar must be passed,
   # which can be accomplished with:
   #     install_options => [ { '-Dfoo' => 'bar' } ]
@@ -173,21 +186,18 @@ Puppet::Type.type(:package).provide :rpm, :source => :rpm, :parent => Puppet::Pr
 
   # @param line [String] one line of rpm package query information
   # @return [Hash] of NEVRA_FIELDS strings parsed from package info
-  # if we failed to parse
-  # @note warns if failed to match a line, and returns an empty Hash.
+  # or an empty hash if we failed to parse
   # @api private
   def self.nevra_to_hash(line)
     line.strip!
     hash = {}
 
-    if self::RPM_PACKAGE_NOT_FOUND_REGEX.match(line)
-      # pass through, package was not found
-    elsif match = self::NEVRA_REGEX.match(line)
+    if match = self::NEVRA_REGEX.match(line)
       self::NEVRA_FIELDS.zip(match.captures) { |f, v| hash[f] = v }
       hash[:provider] = self.name
       hash[:ensure] = "#{hash[:version]}-#{hash[:release]}"
     else
-      Puppet.warning "Failed to match rpm line #{line}"
+      Puppet.debug("Failed to match rpm line #{line}")
     end
 
     return hash

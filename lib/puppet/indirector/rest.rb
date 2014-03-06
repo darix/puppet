@@ -8,7 +8,6 @@ require 'puppet/network/http/compression'
 
 # Access objects via REST
 class Puppet::Indirector::REST < Puppet::Indirector::Terminus
-  include Puppet::Network::HTTP::API::V1
   include Puppet::Network::HTTP::Compression.module
 
   class << self
@@ -55,7 +54,8 @@ class Puppet::Indirector::REST < Puppet::Indirector::Terminus
   end
 
   def network(request)
-    Puppet::Network::HTTP::Connection.new(request.server || self.class.server, request.port || self.class.port)
+    Puppet::Network::HttpPool.http_instance(request.server || self.class.server,
+                                            request.port || self.class.port)
   end
 
   def http_get(request, path, headers = nil, *args)
@@ -84,7 +84,7 @@ class Puppet::Indirector::REST < Puppet::Indirector::Terminus
   end
 
   def find(request)
-    uri, body = request_to_uri_and_body(request)
+    uri, body = Puppet::Network::HTTP::API::V1.request_to_uri_and_body(request)
     uri_with_query_string = "#{uri}?#{body}"
 
     response = do_request(request) do |request|
@@ -110,7 +110,7 @@ class Puppet::Indirector::REST < Puppet::Indirector::Terminus
 
   def head(request)
     response = do_request(request) do |request|
-      http_head(request, indirection2uri(request), headers)
+      http_head(request, Puppet::Network::HTTP::API::V1.indirection2uri(request), headers)
     end
 
     if is_http_200?(response)
@@ -123,7 +123,7 @@ class Puppet::Indirector::REST < Puppet::Indirector::Terminus
 
   def search(request)
     response = do_request(request) do |request|
-      http_get(request, indirection2uri(request), headers)
+      http_get(request, Puppet::Network::HTTP::API::V1.indirection2uri(request), headers)
     end
 
     if is_http_200?(response)
@@ -139,7 +139,7 @@ class Puppet::Indirector::REST < Puppet::Indirector::Terminus
     raise ArgumentError, "DELETE does not accept options" unless request.options.empty?
 
     response = do_request(request) do |request|
-      http_delete(request, indirection2uri(request), headers)
+      http_delete(request, Puppet::Network::HTTP::API::V1.indirection2uri(request), headers)
     end
 
     if is_http_200?(response)
@@ -155,7 +155,7 @@ class Puppet::Indirector::REST < Puppet::Indirector::Terminus
     raise ArgumentError, "PUT does not accept options" unless request.options.empty?
 
     response = do_request(request) do |request|
-      http_put(request, indirection2uri(request), request.instance.render, headers.merge({ "Content-Type" => request.instance.mime }))
+      http_put(request, Puppet::Network::HTTP::API::V1.indirection2uri(request), request.instance.render, headers.merge({ "Content-Type" => request.instance.mime }))
     end
 
     if is_http_200?(response)
@@ -241,6 +241,6 @@ class Puppet::Indirector::REST < Puppet::Indirector::Terminus
   end
 
   def environment
-    Puppet::Node::Environment.new
+    Puppet.lookup(:environments).get(Puppet[:environment])
   end
 end

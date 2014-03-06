@@ -5,7 +5,6 @@ require 'puppet/parser/parser_factory'
 
 class Puppet::Parser::TypeLoader
   extend  Forwardable
-  include Puppet::Node::Environment::Helper
 
   # Import manifest files that match a given file glob pattern.
   #
@@ -48,6 +47,18 @@ class Puppet::Parser::TypeLoader
 
   def initialize(env)
     self.environment = env
+  end
+
+  def environment
+    @environment
+  end
+
+  def environment=(env)
+    if env.is_a?(String) or env.is_a?(Symbol)
+      @environment = Puppet.lookup(:environments).get(env)
+    else
+      @environment = env
+    end
   end
 
   # Try to load the object with the given fully qualified name.
@@ -95,7 +106,26 @@ class Puppet::Parser::TypeLoader
     @loaded ||= {}
     loaded_asts = []
     files.reject { |file| @loaded[file] }.each do |file|
-      loaded_asts << parse_file(file)
+      # NOTE: This ugly implementation will be replaced in Puppet 3.5.
+      # The implementation now makes use of a global variable because the context support is
+      # not available until Puppet 3.5.
+      # The use case is that parsing for the purpose of searching for information
+      # should not abort. There is currently one such use case in indirector/resourcetype/parser
+      #
+    if Puppet.lookup(:squelch_parse_errors) {|| false }
+        begin
+          loaded_asts << parse_file(file)
+        rescue => e
+          # Resume from errors so that all parseable files would
+          # still be parsed. Mark this file as loaded so that
+          # it would not be parsed next time (handle it as if
+          # it was successfully parsed).
+          Puppet.debug("Unable to parse '#{file}': #{e.message}")
+        end
+      else
+        loaded_asts << parse_file(file)
+      end
+
       @loaded[file] = true
     end
 

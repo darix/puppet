@@ -22,13 +22,16 @@ class Puppet::Network::HTTP::WEBrick
     @server = WEBrick::HTTPServer.new(arguments)
     @server.listeners.each { |l| l.start_immediately = false }
 
-    @server.mount('/', Puppet::Network::HTTP::WEBrickREST, :this_value_is_apparently_necessary_but_unused)
+    @server.mount('/', Puppet::Network::HTTP::WEBrickREST)
 
     raise "WEBrick server is already listening" if @listening
     @listening = true
     @thread = Thread.new do
       @server.start do |sock|
-        raise "Client disconnected before connection could be established" unless IO.select([sock],nil,nil,6.2)
+        timeout = 10.0
+        if ! IO.select([sock],nil,nil,timeout)
+          raise "Client did not send data within %.1f seconds of connecting" % timeout
+        end
         sock.accept
         @server.run(sock)
       end

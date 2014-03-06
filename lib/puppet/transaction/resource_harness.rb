@@ -1,6 +1,8 @@
 require 'puppet/resource/status'
 
 class Puppet::Transaction::ResourceHarness
+  NO_ACTION = Object.new
+
   extend Forwardable
   def_delegators :@transaction, :relationship_graph
 
@@ -74,14 +76,21 @@ class Puppet::Transaction::ResourceHarness
       cache(resource, param, context.current_values[param])
     end
 
-    managed_via_ensure = manage_via_ensure_if_possible(resource, context)
-
-    if !managed_via_ensure && context.resource_present?
-      resource.properties.each do |param|
-        sync_if_needed(param, context)
-      end
+    ensure_param = resource.parameter(:ensure)
+    if ensure_param && ensure_param.should
+      ensure_event = sync_if_needed(ensure_param, context)
     else
-      resource.debug("Nothing to manage: no ensure and the resource doesn't exist")
+      ensure_event = NO_ACTION
+    end
+
+    if ensure_event == NO_ACTION
+      if context.resource_present?
+        resource.properties.each do |param|
+          sync_if_needed(param, context)
+        end
+      else
+        resource.debug("Nothing to manage: no ensure and the resource doesn't exist")
+      end
     end
 
     capture_audit_events(resource, context)
@@ -96,15 +105,6 @@ class Puppet::Transaction::ResourceHarness
       false
     else
       true
-    end
-  end
-
-  def manage_via_ensure_if_possible(resource, context)
-    ensure_param = resource.parameter(:ensure)
-    if ensure_param && ensure_param.should
-      sync_if_needed(ensure_param, context)
-    else
-      false
     end
   end
 
@@ -128,9 +128,9 @@ class Puppet::Transaction::ResourceHarness
           sync(event, param, current_value, brief_audit_message)
         end
 
-        true
+        event
       else
-        false
+        NO_ACTION
       end
     rescue => detail
       # Execution will continue on StandardErrors, just store the event
@@ -139,7 +139,7 @@ class Puppet::Transaction::ResourceHarness
       event = create_change_event(param, current_value, historical_value)
       event.status = "failure"
       event.message = "change from #{param.is_to_s(current_value)} to #{param.should_to_s(param.should)} failed: #{detail}"
-      false
+      event
     rescue Exception => detail
       # Execution will halt on Exceptions, they get raised to the application
       event = create_change_event(param, current_value, historical_value)
@@ -212,13 +212,15 @@ class Puppet::Transaction::ResourceHarness
   end
 
   # @api private
-  ResourceApplicationContext = Struct.new(:current_values,
+  ResourceApplicationContext = Struct.new(:resource,
+                                          :current_values,
                                           :historical_values,
                                           :audited_params,
                                           :synced_params,
                                           :status) do
     def self.from_resource(resource, status)
-      ResourceApplicationContext.new(resource.retrieve_resource.to_hash,
+      ResourceApplicationContext.new(resource,
+                                     resource.retrieve_resource.to_hash,
                                      Puppet::Util::Storage.cache(resource).dup,
                                      (resource[:audit] || []).map { |p| p.to_sym },
                                      [],
@@ -226,7 +228,7 @@ class Puppet::Transaction::ResourceHarness
     end
 
     def resource_present?
-      current_values[:ensure] != :absent
+      resource.present?(current_values)
     end
 
     def record(event)

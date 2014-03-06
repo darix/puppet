@@ -21,10 +21,6 @@ describe Puppet::SSL::CertificateAuthority, :unless => Puppet.features.microsoft
     @ca = Puppet::SSL::CertificateAuthority.new
   end
 
-  after do
-    Puppet::SSL::CertificateAuthority.instance_variable_set("@instance", nil)
-  end
-
   it "should be able to generate a new host certificate" do
     ca.generate("newhost")
 
@@ -108,7 +104,7 @@ describe Puppet::SSL::CertificateAuthority, :unless => Puppet.features.microsoft
     hosts = (0..4).collect { |i| certificate_request_for("host#{i}") }
 
     run_in_parallel(5) do |i|
-      ca.autosign(hosts[i].name)
+      ca.autosign(Puppet::SSL::CertificateRequest.indirection.find(hosts[i].name))
     end
 
     certs = hosts.collect { |host| Puppet::SSL::Certificate.indirection.find(host.name).content }
