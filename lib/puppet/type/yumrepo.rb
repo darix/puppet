@@ -52,7 +52,7 @@ module Puppet
 
   newtype(:yumrepo) do
     @doc = "The client-side description of a yum repository. Repository
-      configurations are found by parsing `/etc/yum.conf` and
+      configurations are found by parsing `/etc/yum/yum.conf` and
       the files indicated by the `reposdir` option in that file 
       (see yum.conf(5) for details)
 
@@ -75,7 +75,7 @@ module Puppet
 
     @inifile = nil
 
-    @yumconf = "/etc/yum.conf"
+    @yumconf = "/etc/yum/yum.conf"
 
     # Where to put files for brand new sections
     @defaultrepodir = nil
@@ -184,7 +184,7 @@ module Puppet
     # This is only used during testing.
     def self.clear
       @inifile = nil
-      @yumconf = "/etc/yum.conf"
+      @yumconf = "/etc/yum/yum.conf"
       @defaultrepodir = nil
     end
 
