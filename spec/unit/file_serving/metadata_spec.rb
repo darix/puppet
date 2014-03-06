@@ -33,13 +33,6 @@ describe Puppet::FileServing::Metadata do
     before do
       @metadata = Puppet::FileServing::Metadata.new("/foo/bar")
     end
-    it "should perform pson serialization by calling to_pson on it's pson_data_hash" do
-      pdh = mock "data hash"
-      pdh_as_pson = mock "data as pson"
-      @metadata.expects(:to_pson_data_hash).returns pdh
-      pdh.expects(:to_pson).returns pdh_as_pson
-      @metadata.to_pson.should == pdh_as_pson
-    end
 
     it "should serialize as FileMetadata" do
       @metadata.to_pson_data_hash['document_type'].should == "FileMetadata"

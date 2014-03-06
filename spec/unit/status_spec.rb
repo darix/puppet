@@ -28,4 +28,12 @@ describe Puppet::Status do
   it "should allow a name to be set" do
     Puppet::Status.new.name = "status"
   end
+
+  it "can do a round-trip serialization via YAML" do
+    status = Puppet::Status.new
+    new_status = Puppet::Status.convert_from('yaml', status.render('yaml'))
+    new_status.instance_variables.each do |attr|
+      new_status.instance_variable_get(attr).should == status.instance_variable_get(attr)
+    end
+  end
 end

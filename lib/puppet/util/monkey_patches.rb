@@ -1,4 +1,3 @@
-
 unless defined? JRUBY_VERSION
   Process.maxgroups = 1024
 end

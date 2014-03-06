@@ -32,25 +32,83 @@ class Puppet::Indirector::REST < Puppet::Indirector::Terminus
     Puppet.settings[port_setting || :masterport].to_i
   end
 
-  # Figure out the content type, turn that into a format, and use the format
-  # to extract the body of the response.
-  def deserialize(response, multiple = false)
+  # Provide appropriate headers.
+  def headers
+    add_accept_encoding({"Accept" => model.supported_formats.join(", ")})
+  end
+
+  def network(request)
+    Puppet::Network::HttpPool.http_instance(request.server || self.class.server, request.port || self.class.port)
+  end
+
+  def find(request)
+    response = network(request).get(indirection2uri(request), headers)
+
+    if is_http_200?(response)
+      content_type, body = parse_response(response)
+      result = deserialize_find(content_type, body)
+      result.name = request.key if result.respond_to?(:name=)
+      result
+    else
+      nil
+    end
+  end
+
+  def head(request)
+    response = network(request).head(indirection2uri(request), headers)
+
+    !!is_http_200?(response)
+  end
+
+  def search(request)
+    response = network(request).get(indirection2uri(request), headers)
+
+    if is_http_200?(response)
+      content_type, body = parse_response(response)
+      deserialize_search(content_type, body) || []
+    else
+      []
+    end
+  end
+
+  def destroy(request)
+    raise ArgumentError, "DELETE does not accept options" unless request.options.empty?
+
+    response = network(request).delete(indirection2uri(request), headers)
+
+    if is_http_200?(response)
+      content_type, body = parse_response(response)
+      deserialize_destroy(content_type, body)
+    else
+      nil
+    end
+  end
+
+  def save(request)
+    raise ArgumentError, "PUT does not accept options" unless request.options.empty?
+
+    response = network(request).put(indirection2uri(request), request.instance.render, headers.merge({ "Content-Type" => request.instance.mime }))
+
+    if is_http_200?(response)
+      content_type, body = parse_response(response)
+      deserialize_save(content_type, body)
+    else
+      nil
+    end
+  end
+
+  def validate_key(request)
+    # Validation happens on the remote end
+  end
+
+  private
+
+  def is_http_200?(response)
     case response.code
     when "404"
-      return nil
+      false
     when /^2/
-      raise "No content type in http response; cannot parse" unless response['content-type']
-
-      content_type = response['content-type'].gsub(/\s*;.*$/,'') # strip any appended charset
-
-      body = uncompress_body(response)
-
-      # Convert the response to a deserialized object.
-      if multiple
-        model.convert_from_multiple(content_type, body)
-      else
-        model.convert_from(content_type, body)
-      end
+      true
     else
       # Raise the http error if we didn't get a 'success' of some kind.
       raise convert_to_http_error(response)
@@ -62,56 +120,33 @@ class Puppet::Indirector::REST < Puppet::Indirector::Terminus
     Net::HTTPError.new(message, response)
   end
 
-  # Provide appropriate headers.
-  def headers
-    add_accept_encoding({"Accept" => model.supported_formats.join(", ")})
-  end
-
-  def network(request)
-    Puppet::Network::HttpPool.http_instance(request.server || self.class.server, request.port || self.class.port)
-  end
-
-  def find(request)
-    return nil unless result = deserialize(network(request).get(indirection2uri(request), headers))
-    result.name = request.key if result.respond_to?(:name=)
-    result
-  end
-
-  def head(request)
-    response = network(request).head(indirection2uri(request), headers)
-    case response.code
-    when "404"
-      return false
-    when /^2/
-      return true
+  # Returns the content_type, stripping any appended charset, and the
+  # body, decompressed if necessary (content-encoding is checked inside
+  # uncompress_body)
+  def parse_response(response)
+    if response['content-type']
+      [ response['content-type'].gsub(/\s*;.*$/,''),
+        body = uncompress_body(response) ]
     else
-      # Raise the http error if we didn't get a 'success' of some kind.
-      raise convert_to_http_error(response)
+      raise "No content type in http response; cannot parse"
     end
   end
 
-  def search(request)
-    unless result = deserialize(network(request).get(indirection2uri(request), headers), true)
-      return []
-    end
-    result
+  def deserialize_find(content_type, body)
+    model.convert_from(content_type, body)
   end
 
-  def destroy(request)
-    raise ArgumentError, "DELETE does not accept options" unless request.options.empty?
-    deserialize network(request).delete(indirection2uri(request), headers)
+  def deserialize_search(content_type, body)
+    model.convert_from_multiple(content_type, body)
   end
 
-  def save(request)
-    raise ArgumentError, "PUT does not accept options" unless request.options.empty?
-    deserialize network(request).put(indirection2uri(request), request.instance.render, headers.merge({ "Content-Type" => request.instance.mime }))
+  def deserialize_destroy(content_type, body)
+    model.convert_from(content_type, body)
   end
 
-  def validate_key(request)
-    # Validation happens on the remote end
+  def deserialize_save(content_type, body)
+    nil
   end
-
-  private
 
   def environment
     Puppet::Node::Environment.new

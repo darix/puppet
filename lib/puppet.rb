@@ -5,6 +5,8 @@ rescue LoadError
 end
 
 # see the bottom of the file for further inclusions
+# Also see the new Vendor support - towards the end
+
 require 'singleton'
 require 'facter'
 require 'puppet/error'
@@ -151,6 +153,15 @@ module Puppet
     Puppet.warning "Puppet.type is deprecated; use Puppet::Type.type"
     Puppet::Type.type(name)
   end
+
+  # Load vendored (setup paths, and load what is needed upfront).
+  # See the Vendor class for how to add additional vendored gems/code
+  require "puppet/vendor"
+  Puppet::Vendor.load_vendored
+
+  # Set default for YAML.load to unsafe so we don't affect programs
+  # requiring puppet -- in puppet we will call safe explicitly
+  SafeYAML::OPTIONS[:default_mode] = :unsafe
 end
 
 require 'puppet/type'

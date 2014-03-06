@@ -139,6 +139,22 @@ describe Puppet::Network::HTTP::Handler do
       @handler.request_format(@request).should == "s"
     end
 
+    it "should deserialize YAML parameters" do
+      params = {'my_param' => [1,2,3].to_yaml}
+
+      decoded_params = @handler.send(:decode_params, params)
+
+      decoded_params.should == {:my_param => [1,2,3]}
+    end
+
+    it "should ignore tags on YAML parameters" do
+      params = {'my_param' => "--- !ruby/object:Array {}"}
+
+      decoded_params = @handler.send(:decode_params, params)
+
+      decoded_params[:my_param].should be_a(Hash)
+    end
+
     describe "when finding a model instance" do
       before do
         @irequest = stub 'indirection_request', :method => :find, :indirection_name => "my_handler", :to_hash => {}, :key => "my_result", :model => @model_class
