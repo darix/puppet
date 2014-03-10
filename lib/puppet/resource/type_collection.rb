@@ -124,19 +124,19 @@ class Puppet::Resource::TypeCollection
     nil
   end
 
-  def find_or_load(namespaces, name, type)
-    name      = name.downcase
-    namespaces = [namespaces] unless namespaces.is_a?(Array)
-    namespaces = namespaces.collect { |ns| ns.downcase }
-
-    # This could be done in the load_until, but the knowledge seems to
-    # belong here.
-    if r = find(namespaces, name, type)
-      return r
-    end
-
-    loader.load_until(namespaces, name) { find(namespaces, name, type) }
-  end
+# def find_or_load(namespaces, name, type)
+#   name      = name.downcase
+#   namespaces = [namespaces] unless namespaces.is_a?(Array)
+#   namespaces = namespaces.collect { |ns| ns.downcase }
+#
+#   # This could be done in the load_until, but the knowledge seems to
+#   # belong here.
+#   if r = find(namespaces, name, type)
+#     return r
+#   end
+#
+#   loader.load_until(namespaces, name) { find(namespaces, name, type) }
+# end
 
   def find_node(namespaces, name)
     find("", name, :node)
@@ -205,6 +205,54 @@ class Puppet::Resource::TypeCollection
   end
 
   private
+
+  # Return a list of all possible fully-qualified names that might be
+  # meant by the given name, in the context of namespaces.
+  def resolve_namespaces(namespaces, name)
+    name      = name.downcase
+    if name =~ /^::/
+      # name is explicitly fully qualified, so just return it, sans
+      # initial "::".
+      return [name.sub(/^::/, '')]
+    end
+    if name == ""
+      # The name "" has special meaning--it always refers to a "main"
+      # hostclass which contains all toplevel resources.
+      return [""]
+    end
+
+    namespaces = [namespaces] unless namespaces.is_a?(Array)
+    namespaces = namespaces.collect { |ns| ns.downcase }
+
+    result = []
+    namespaces.each do |namespace|
+      ary = namespace.split("::")
+
+      # Search each namespace nesting in innermost-to-outermost order.
+      while ary.length > 0
+        result << "#{ary.join("::")}::#{name}"
+        ary.pop
+      end
+
+      # Finally, search the toplevel namespace.
+      result << name
+    end
+
+    return result.uniq
+  end
+
+  # Resolve namespaces and find the given object.  Autoload it if
+  # necessary.
+  def find_or_load(namespaces, name, type)
+    resolve_namespaces(namespaces, name).each do |fqname|
+      if result = send(type, fqname) || loader.try_load_fqname(type, fqname)
+        return result
+      end
+    end
+
+    # Nothing found.
+    return nil
+  end
 
   def find_partially_qualified(namespace, name, type)
     send(type, [namespace, name].join("::"))

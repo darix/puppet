@@ -2,10 +2,13 @@
 require 'puppet/util/monkey_patches'
 require 'puppet/external/lock'
 require 'puppet/util/execution_stub'
+require 'uri'
 require 'sync'
 require 'monitor'
 require 'tempfile'
 require 'pathname'
+require 'ostruct'
+require 'puppet/util/platform'
 
 module Puppet
   # A command failed to execute.
@@ -185,19 +188,124 @@ module Util
   end
 
   def which(bin)
-    if bin =~ /^\//
+    if absolute_path?(bin)
       return bin if FileTest.file? bin and FileTest.executable? bin
     else
       ENV['PATH'].split(File::PATH_SEPARATOR).each do |dir|
-        dest=File.join(dir, bin)
-        return dest if FileTest.file? dest and FileTest.executable? dest
+        begin
+          dest = File.expand_path(File.join(dir, bin))
+          if Puppet.features.microsoft_windows? && File.extname(dest).empty?
+            exts = ENV['PATHEXT']
+            exts = exts ? exts.split(File::PATH_SEPARATOR) : %w[.COM .EXE .BAT .CMD]
+            exts.each do |ext|
+              destext = File.expand_path(dest + ext)
+              return destext if FileTest.file? destext and FileTest.executable? destext
+            end
+          end
+          return dest if FileTest.file? dest and FileTest.executable? dest
+        rescue ArgumentError => e
+          raise unless e.to_s =~ /doesn't exist|can't find user/
+          # ...otherwise, we just skip the non-existent entry, and do nothing.
+        end
       end
     end
     nil
   end
   module_function :which
 
-  # Execute the provided command in a pipe, yielding the pipe object.
+  # Determine in a platform-specific way whether a path is absolute. This
+  # defaults to the local platform if none is specified.
+  #
+  # Escape once for the string literal, and once for the regex.
+  slash = '[\\\\/]'
+  label = '[^\\\\/]+'
+  AbsolutePathWindows = %r!^(?:(?:[A-Z]:#{slash})|(?:#{slash}#{slash}#{label}#{slash}#{label})|(?:#{slash}#{slash}\?#{slash}#{label}))!io
+  AbsolutePathPosix   = %r!^/!
+  def absolute_path?(path, platform=nil)
+    # When running an internal subcommand (Application), the app requires puppet
+    # which loads features, which creates an autoloader, which calls this method.
+    # In that case, it isn't necessary to require puppet. When running an external
+    # subcommand or if none was specified, then the CommandLine will call the
+    # `which` method to resolve the external executable, and that requires features.
+    # Rather then moving this require to handle the external subcommand case, or
+    # no subcommand case, I'm undoing the performance change from 20efe94. This
+    # code has been eliminated in 3.x since puppet can be required before loading
+    # the application (since the default vardir/confdir locations are solely
+    # based on user vs. system user, and not the application's run_mode).
+    require 'puppet'
+
+    # Ruby only sets File::ALT_SEPARATOR on Windows and the Ruby standard
+    # library uses that to test what platform it's on.  Normally in Puppet we
+    # would use Puppet.features.microsoft_windows?, but this method needs to
+    # be called during the initialization of features so it can't depend on
+    # that.
+    platform ||= Puppet::Util::Platform.windows? ? :windows : :posix
+    regex = case platform
+            when :windows
+              AbsolutePathWindows
+            when :posix
+              AbsolutePathPosix
+            else
+              raise Puppet::DevError, "unknown platform #{platform} in absolute_path"
+            end
+
+    !! (path =~ regex)
+  end
+  module_function :absolute_path?
+
+  # Convert a path to a file URI
+  def path_to_uri(path)
+    return unless path
+
+    params = { :scheme => 'file' }
+
+    if Puppet.features.microsoft_windows?
+      path = path.gsub(/\\/, '/')
+
+      if unc = /^\/\/([^\/]+)(\/[^\/]+)/.match(path)
+        params[:host] = unc[1]
+        path = unc[2]
+      elsif path =~ /^[a-z]:\//i
+        path = '/' + path
+      end
+    end
+
+    params[:path] = URI.escape(path)
+
+    begin
+      URI::Generic.build(params)
+    rescue => detail
+      raise Puppet::Error, "Failed to convert '#{path}' to URI: #{detail}"
+    end
+  end
+  module_function :path_to_uri
+
+  # Get the path component of a URI
+  def uri_to_path(uri)
+    return unless uri.is_a?(URI)
+
+    path = URI.unescape(uri.path)
+
+    if Puppet.features.microsoft_windows? and uri.scheme == 'file'
+      if uri.host
+        path = "//#{uri.host}" + path # UNC
+      else
+        path.sub!(/^\//, '')
+      end
+    end
+
+    path
+  end
+  module_function :uri_to_path
+
+  # Execute the provided command with STDIN connected to a pipe, yielding the
+  # pipe object.  That allows data to be fed to that subprocess.
+  #
+  # The command can be a simple string, which is executed as-is, or an Array,
+  # which is treated as a set of command arguments to pass through.#
+  #
+  # In all cases this is passed directly to the shell, and STDOUT and STDERR
+  # are connected together during execution.
   def execpipe(command, failonfail = true)
     if respond_to? :debug
       debug "Executing '#{command}'"

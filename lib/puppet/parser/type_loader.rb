@@ -79,7 +79,8 @@ class Puppet::Parser::TypeLoader
       if files.empty?
         raise_no_files_found(pattern)
       end
-	end
+    end
+
     load_files(modname, files)
   end
 
@@ -90,6 +91,26 @@ class Puppet::Parser::TypeLoader
   def initialize(env)
     self.environment = env
     @loading_helper = Helper.new
+  end
+
+  # Try to load the object with the given fully qualified name.
+  def try_load_fqname(type, fqname)
+    return nil if fqname == "" # special-case main.
+    name2files(fqname).each do |filename|
+      begin
+        imported_types = import_from_modules(filename)
+        if result = imported_types.find { |t| t.type == type and t.name == fqname }
+          Puppet.debug "Automatically imported #{fqname} from #{filename} into #{environment}"
+          return result
+        end
+      rescue Puppet::ImportError => detail
+        # We couldn't load the item
+        # I'm not convienced we should just drop these errors, but this
+        # preserves existing behaviours.
+      end
+    end
+    # Nothing found.
+    return nil
   end
 
   def load_until(namespaces, name)
@@ -132,29 +153,41 @@ class Puppet::Parser::TypeLoader
       end
     end
 
-    loaded_asts.collect do |ast|
-      known_resource_types.import_ast(ast, modname)
-    end.flatten
+#   loaded_asts.collect do |ast|
+#     known_resource_types.import_ast(ast, modname)
+#   end.flatten
+    loaded_asts.flatten
   end
 
-  def name2files(namespaces, name)
-    return [name.sub(/^::/, '').gsub("::", File::SEPARATOR)] if name =~ /^::/
-
-    result = namespaces.inject([]) do |names_to_try, namespace|
-      fullname = (namespace + "::#{name}").sub(/^::/, '')
-
-      # Try to load the module init file if we're a qualified name
-      names_to_try << fullname.split("::")[0] if fullname.include?("::")
-
-      # Then the fully qualified name
-      names_to_try << fullname
+# def name2files(namespaces, name)
+#   return [name.sub(/^::/, '').gsub("::", File::SEPARATOR)] if name =~ /^::/
+#
+#   result = namespaces.inject([]) do |names_to_try, namespace|
+#     fullname = (namespace + "::#{name}").sub(/^::/, '')
+#
+#     # Try to load the module init file if we're a qualified name
+#     names_to_try << fullname.split("::")[0] if fullname.include?("::")
+#
+#     # Then the fully qualified name
+#     names_to_try << fullname
+#   end
+#
+#   # Otherwise try to load the bare name on its own.  This
+#   # is appropriate if the class we're looking for is in a
+#   # module that's different from our namespace.
+#   result << name
+#   result.uniq.collect { |f| f.gsub("::", File::SEPARATOR) }
+# end
+  # Return a list of all file basenames that should be tried in order
+  # to load the object with the given fully qualified name.
+  def name2files(fqname)
+    result = []
+    ary = fqname.split("::")
+    while ary.length > 0
+      result << ary.join(File::SEPARATOR)
+      ary.pop
     end
-
-    # Otherwise try to load the bare name on its own.  This
-    # is appropriate if the class we're looking for is in a
-    # module that's different from our namespace.
-    result << name
-    result.uniq.collect { |f| f.gsub("::", File::SEPARATOR) }
+    return result
   end
 
   def parse_file(file)
